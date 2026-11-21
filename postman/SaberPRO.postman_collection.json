@@ -1,0 +1,378 @@
+{
+  "info": {
+    "_postman_id": "db1851b1-d237-407c-98e6-d872f8d63b89",
+    "name": "Saber PRO - Parcial 2 (Corte II)",
+    "description": "Pruebas del Banco de Preguntas Saber PRO: REST sincrono, JPA, RabbitMQ.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Principales (Punto 4: 4 solicitudes)",
+      "item": [
+        {
+          "name": "1. Crear pregunta valida (201 Created)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "http://{{host}}:{{questionPort}}/questions"
+            },
+            "description": "Question Service llama a POST /validate (Validation Service), persiste en H2 con estado DRAFT y responde 201. Captura el id en {{questionId}}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"statement\": \"Cual de las siguientes estructuras de datos sigue el principio LIFO?\",\n  \"options\": [\n    {\n      \"key\": \"A\",\n      \"text\": \"Cola\"\n    },\n    {\n      \"key\": \"B\",\n      \"text\": \"Pila\"\n    },\n    {\n      \"key\": \"C\",\n      \"text\": \"Arbol binario\"\n    },\n    {\n      \"key\": \"D\",\n      \"text\": \"Tabla hash\"\n    }\n  ],\n  \"correctKey\": \"B\",\n  \"justification\": \"La pila es LIFO: el ultimo elemento en entrar es el primero en salir, a diferencia de la cola que es FIFO.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201 Created\", () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Estructura de la respuesta\", () => {",
+                  "  pm.expect(body).to.have.all.keys(\"id\",\"statement\",\"options\",\"correctKey\",\"justification\",\"status\");",
+                  "  pm.expect(body.id).to.be.a(\"number\");",
+                  "  pm.expect(body.options).to.be.an(\"array\").with.lengthOf(4);",
+                  "});",
+                  "pm.test(\"Estado inicial = DRAFT\", () => pm.expect(body.status).to.eql(\"DRAFT\"));",
+                  "pm.test(\"Header Location apunta a la pregunta creada\", () => pm.expect(pm.response.headers.get(\"Location\")).to.eql(\"/questions/\" + body.id));",
+                  "if (body && body.id) { pm.collectionVariables.set(\"questionId\", body.id); }",
+                  "pm.test(\"ID capturado en la variable questionId\", () => pm.expect(String(pm.collectionVariables.get(\"questionId\"))).to.eql(String(body.id)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Crear pregunta invalida (400 Bad Request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "http://{{host}}:{{questionPort}}/questions"
+            },
+            "description": "3 opciones, clave 'Z' inexistente y justificacion corta. No se persiste nada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"statement\": \"Pregunta con errores estructurales\",\n  \"options\": [\n    {\n      \"key\": \"A\",\n      \"text\": \"Uno\"\n    },\n    {\n      \"key\": \"B\",\n      \"text\": \"Dos\"\n    },\n    {\n      \"key\": \"C\",\n      \"text\": \"Tres\"\n    }\n  ],\n  \"correctKey\": \"Z\",\n  \"justification\": \"corta\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400 Bad Request\", () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Estructura del error\", () => {",
+                  "  pm.expect(body.status).to.eql(400);",
+                  "  pm.expect(body.message).to.be.a(\"string\");",
+                  "  pm.expect(body.errors).to.be.an(\"array\").that.is.not.empty;",
+                  "});",
+                  "const all = body.errors.join(\" | \");",
+                  "pm.test(\"Reporta que no hay exactamente 4 opciones\", () => pm.expect(all).to.match(/exactamente 4 opciones/));",
+                  "pm.test(\"Reporta clave de respuesta inexistente\", () => pm.expect(all).to.match(/clave de respuesta 'Z' no existe/));",
+                  "pm.test(\"Reporta justificacion invalida\", () => pm.expect(all).to.match(/justificacion debe tener al menos/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Enviar a revision (202 Accepted)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "http://{{host}}:{{questionPort}}/questions/{{questionId}}/submit"
+            },
+            "description": "Publica SubmitQuestionForReview en saberpro.direct.exchange (routing key question.submit) y responde de inmediato."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"questionId\")) { console.warn(\"questionId vacio: ejecute primero la solicitud 1\"); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 202 Accepted\", () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Estructura: operationId + status\", () => pm.expect(body).to.have.all.keys(\"operationId\",\"status\"));",
+                  "pm.test(\"operationId es un UUID\", () => pm.expect(body.operationId).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i));",
+                  "pm.test(\"status = PROCESSING\", () => pm.expect(body.status).to.eql(\"PROCESSING\"));",
+                  "pm.test(\"Respuesta no bloqueante (< 2000 ms)\", () => pm.expect(pm.response.responseTime).to.be.below(2000));",
+                  "pm.collectionVariables.set(\"operationId\", body.operationId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Verificar entrega en RabbitMQ (consola de gestion)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://{{host}}:{{rabbitMgmtPort}}/api/queues/%2F/question.submit.review.queue"
+            },
+            "description": "Consulta la API HTTP de la consola de gestion (http://localhost:15672). Espera 6 s para que se refresquen las estadisticas.",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{rabbitUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{rabbitPass}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// El Management de RabbitMQ refresca sus estadisticas cada ~5 s: se espera 6 s antes de consultar.",
+                  "const end = Date.now() + 6000; while (Date.now() < end) {}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200 (API de gestion de RabbitMQ)\", () => pm.response.to.have.status(200));",
+                  "const q = pm.response.json();",
+                  "pm.test(\"Cola question.submit.review.queue existe y es durable\", () => {",
+                  "  pm.expect(q.name).to.eql(\"question.submit.review.queue\");",
+                  "  pm.expect(q.durable).to.eql(true);",
+                  "});",
+                  "pm.test(\"Hay al menos un consumidor suscrito (Lifecycle Service)\", () => pm.expect(q.consumers).to.be.at.least(1));",
+                  "pm.test(\"El mensaje fue publicado (message_stats.publish >= 1)\", () => {",
+                  "  pm.expect(q.message_stats, \"message_stats\").to.exist;",
+                  "  pm.expect(q.message_stats.publish).to.be.at.least(1);",
+                  "});",
+                  "pm.test(\"El mensaje fue entregado y confirmado (message_stats.ack >= 1)\", () => pm.expect(q.message_stats.ack).to.be.at.least(1));",
+                  "pm.test(\"Sin mensajes pendientes en la cola (messages_ready = 0)\", () => pm.expect(q.messages_ready).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Extras de verificacion",
+      "item": [
+        {
+          "name": "E1. Validation Service directo - pregunta valida (200 OK)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "http://{{host}}:{{validationPort}}/validate"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"statement\": \"Cual de las siguientes estructuras de datos sigue el principio LIFO?\",\n  \"options\": [\n    {\n      \"key\": \"A\",\n      \"text\": \"Cola\"\n    },\n    {\n      \"key\": \"B\",\n      \"text\": \"Pila\"\n    },\n    {\n      \"key\": \"C\",\n      \"text\": \"Arbol binario\"\n    },\n    {\n      \"key\": \"D\",\n      \"text\": \"Tabla hash\"\n    }\n  ],\n  \"correctKey\": \"B\",\n  \"justification\": \"La pila es LIFO: el ultimo elemento en entrar es el primero en salir, a diferencia de la cola que es FIFO.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Validation Service responde 200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"valid = true y sin errores\", () => { const b = pm.response.json(); pm.expect(b.valid).to.eql(true); pm.expect(b.errors).to.be.an(\"array\").that.is.empty; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E2. Validation Service directo - pregunta invalida (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "http://{{host}}:{{validationPort}}/validate"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"statement\": \"Pregunta con errores estructurales\",\n  \"options\": [\n    {\n      \"key\": \"A\",\n      \"text\": \"Uno\"\n    },\n    {\n      \"key\": \"B\",\n      \"text\": \"Dos\"\n    },\n    {\n      \"key\": \"C\",\n      \"text\": \"Tres\"\n    }\n  ],\n  \"correctKey\": \"Z\",\n  \"justification\": \"corta\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Validation Service responde 400 con errores\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"valid = false y lista de errores\", () => { const b = pm.response.json(); pm.expect(b.valid).to.eql(false); pm.expect(b.errors).to.be.an(\"array\").that.is.not.empty; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E3. Lifecycle Service - estado de la pregunta",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://{{host}}:{{lifecyclePort}}/lifecycle/questions/{{questionId}}"
+            },
+            "description": "Confirma que el consumidor @RabbitListener aplico DRAFT -> PENDING_REVIEW. Ejecutar despues de la solicitud 3."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Lifecycle Service reporta PENDING_REVIEW\", () => {",
+                  "  pm.expect(String(body.questionId)).to.eql(String(pm.collectionVariables.get(\"questionId\")));",
+                  "  pm.expect(body.state).to.eql(\"PENDING_REVIEW\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E4. Question Service - consultar pregunta persistida",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://{{host}}:{{questionPort}}/questions/{{questionId}}"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"La pregunta persistida sigue en DRAFT en el Question Service (el estado lo gobierna Lifecycle)\", () => pm.expect(pm.response.json().status).to.eql(\"DRAFT\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "host",
+      "value": "localhost"
+    },
+    {
+      "key": "validationPort",
+      "value": "8082"
+    },
+    {
+      "key": "questionPort",
+      "value": "8083"
+    },
+    {
+      "key": "lifecyclePort",
+      "value": "8084"
+    },
+    {
+      "key": "rabbitMgmtPort",
+      "value": "15672"
+    },
+    {
+      "key": "rabbitUser",
+      "value": "guest"
+    },
+    {
+      "key": "rabbitPass",
+      "value": "guest"
+    },
+    {
+      "key": "questionId",
+      "value": ""
+    },
+    {
+      "key": "operationId",
+      "value": ""
+    }
+  ]
+}
